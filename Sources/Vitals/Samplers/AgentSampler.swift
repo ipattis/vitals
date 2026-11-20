@@ -2,10 +2,14 @@ import Darwin
 import Foundation
 import IOKit
 
-struct SubagentStatus: Identifiable {
-    var id: String
-    var type: String
-    var description: String
+/// One process inside an agent's tree.
+struct AgentProcess: Identifiable {
+    var id: pid_t { pid }
+    var pid: pid_t
+    var command: String
+    var cpu: Double            // fraction of one core
+    var memory: UInt64
+    var isRoot: Bool
 }
 
 struct AgentReading: Identifiable {
@@ -17,6 +21,9 @@ struct AgentReading: Identifiable {
     var title: String
     var source: String             // "Claude app", "Terminal", "Codex", "LM Studio", …
     var project: String?           // working-folder name
+    var cwd: String?               // full working folder
+    var sessionId: String?         // Claude Code session
+    var version: String?           // Claude Code version
     var isWorking: Bool
     var statusText: String         // "Working", "Idle", …
     var statusSince: Date?
@@ -26,7 +33,10 @@ struct AgentReading: Identifiable {
     var gpu: Double = 0            // 0...1
     var processCount = 0
     var busiest: (command: String, cpu: Double)?
-    var subagents: [SubagentStatus] = []
+    var processes: [AgentProcess] = []     // busiest members of the tree, CPU then memory
+    var activity: AgentActivity?           // parsed transcript (Claude Code only)
+
+    var subagents: [SubagentActivity] { activity?.runningSubagents ?? [] }
 }
 
 /// Finds AI agents and measures everything each one has spawned.
@@ -58,6 +68,7 @@ final class AgentSampler {
         var startedAt: Double?
         var entrypoint: String?
         var procStart: String?
+        var version: String?
     }
 
     private struct Previous { var cpu: Double; var gpu: Double; var time: Double }
@@ -69,8 +80,7 @@ final class AgentSampler {
     private var adopted: [String: [pid_t: Int]] = [:]
     private var discovered: [Root] = []
     private var lastDiscovery = -Double.infinity
-    private var subagentDirs: [String: URL] = [:]
-    private var subagentSearch: [String: Double] = [:]
+    private let transcripts = TranscriptStore()
     private var argvCache: [pid_t: (start: Int, args: [String])] = [:]
 
     private let ticksToSeconds: Double = {
@@ -100,6 +110,7 @@ final class AgentSampler {
         var readings: [AgentReading] = []
         var seenPids: [pid_t: Double] = [:]
         var liveIDs = Set<String>()
+        var liveSessions = Set<String>()
 
         for root in roots {
             let id = "\(root.pid)-\(root.start)"
@@ -117,6 +128,7 @@ final class AgentSampler {
             var memory: UInt64 = 0
             var count = 0
             var busiest: (pid: pid_t, delta: Double)?
+            var perProcess: [(pid: pid_t, delta: Double, memory: UInt64)] = []
             for pid in members {
                 guard let u = AgentSampler.rusage(pid) else { continue }
                 count += 1
@@ -125,6 +137,7 @@ final class AgentSampler {
                 memory += u.ri_phys_footprint
                 gpuTotal += Double(gpuByPid[pid] ?? 0) / 1e9
                 seenPids[pid] = t
+                perProcess.append((pid, previousPerPid[pid].map { max(0, t - $0) } ?? 0, u.ri_phys_footprint))
                 if pid != root.pid, let before = previousPerPid[pid], t - before > (busiest?.delta ?? 0) {
                     busiest = (pid, t - before)
                 }
@@ -146,12 +159,23 @@ final class AgentSampler {
                         r.busiest = (AgentSampler.describe(b.pid, cache: &argvCache), b.delta / dt)
                     }
                 }
+                let top = perProcess.sorted { $0.delta != $1.delta ? $0.delta > $1.delta : $0.memory > $1.memory }.prefix(12)
+                r.processes = top.map { p in
+                    AgentProcess(pid: p.pid, command: AgentSampler.describe(p.pid, cache: &argvCache),
+                                 cpu: dt > 0 ? p.delta / dt : 0, memory: p.memory, isRoot: p.pid == root.pid)
+                }
             }
             previous[id] = Previous(cpu: cpuTotal, gpu: gpuTotal, time: now)
 
             if let reg = root.registry {
-                if let cwd = reg.cwd { r.project = (cwd as NSString).lastPathComponent }
-                r.title = reg.name?.isEmpty == false ? reg.name! : (r.project ?? "Claude Code")
+                if let cwd = reg.cwd { r.project = (cwd as NSString).lastPathComponent; r.cwd = cwd }
+                r.sessionId = reg.sessionId
+                r.version = reg.version
+                if let session = reg.sessionId {
+                    r.activity = transcripts.activity(session: session, cwd: reg.cwd)
+                    liveSessions.insert(session)
+                }
+                r.title = reg.name?.isEmpty == false ? reg.name! : (r.activity?.aiTitle ?? r.project ?? "Claude Code")
                 switch reg.status?.lowercased() {
                 case "busy"?: r.isWorking = true; r.statusText = "Working"
                 case "idle"?, nil: r.statusText = "Idle"
@@ -159,10 +183,10 @@ final class AgentSampler {
                 }
                 if let ms = reg.statusUpdatedAt { r.statusSince = Date(timeIntervalSince1970: ms / 1000) }
                 if let ms = reg.startedAt { r.started = Date(timeIntervalSince1970: ms / 1000) }
-                if let session = reg.sessionId { r.subagents = runningSubagents(session: session, now: now) }
                 if !r.subagents.isEmpty { r.isWorking = true; r.statusText = "Working" }
             } else {
                 if let cwd = AgentSampler.cwd(of: root.pid) {
+                    r.cwd = cwd
                     let name = (cwd as NSString).lastPathComponent
                     if cwd != "/" && cwd != home.path { r.project = name }
                 }
@@ -177,6 +201,7 @@ final class AgentSampler {
         previous = previous.filter { liveIDs.contains($0.key) }
         adopted = adopted.filter { liveIDs.contains($0.key) }
         argvCache = argvCache.filter { seenPids[$0.key] != nil }
+        transcripts.retain(liveSessions)
 
         return readings.sorted { a, b in
             if a.isWorking != b.isWorking { return a.isWorking }
@@ -213,34 +238,6 @@ final class AgentSampler {
             roots.append(Root(pid: entry.pid, start: start, kind: .claudeCode, source: source, registry: entry))
         }
         return roots
-    }
-
-    private func runningSubagents(session: String, now: Double) -> [SubagentStatus] {
-        if subagentDirs[session] == nil, now - (subagentSearch[session] ?? -.infinity) > 15 {
-            subagentSearch[session] = now
-            let projects = home.appendingPathComponent(".claude/projects")
-            for project in (try? FileManager.default.contentsOfDirectory(at: projects, includingPropertiesForKeys: nil)) ?? [] {
-                let candidate = project.appendingPathComponent(session).appendingPathComponent("subagents")
-                if FileManager.default.fileExists(atPath: candidate.path) { subagentDirs[session] = candidate; break }
-            }
-        }
-        guard let dir = subagentDirs[session],
-              let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])
-        else { return [] }
-        var result: [SubagentStatus] = []
-        for meta in files where meta.lastPathComponent.hasSuffix(".meta.json") {
-            guard let data = try? Data(contentsOf: meta),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  (json["finished"] as? Bool) != true else { continue }
-            // Older versions never wrote "finished"; only trust recently active transcripts.
-            let transcript = dir.appendingPathComponent(meta.lastPathComponent.replacingOccurrences(of: ".meta.json", with: ".jsonl"))
-            let modified = (try? transcript.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-            guard let modified, Date().timeIntervalSince(modified) < 600 else { continue }
-            result.append(SubagentStatus(id: meta.lastPathComponent,
-                                         type: json["agentType"] as? String ?? "agent",
-                                         description: json["description"] as? String ?? ""))
-        }
-        return result
     }
 
     // MARK: Other agents

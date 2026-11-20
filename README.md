@@ -5,9 +5,34 @@ open, plus a compact menu bar readout. Native Swift/SwiftUI, no dependencies, no
 
 ## What it shows
 
+The dashboard has two tabs, switched from the header or with **⌘1 Machine Vitals** / **⌘2 Agent
+Vitals** in the View menu.
+
+### Agents tab
+
+- **Agent fleet:** working/total agents, combined CPU (and share of the machine), memory,
+  processes, running subagents, tool calls and errors in the last hour, output tokens, a stacked
+  CPU-by-agent graph and a tool-calls-per-minute chart across every session.
+- **Agent list:** every agent with status, source, folder, CPU, memory, what it is doing right now,
+  and a CPU sparkline. Select one to open its detail pane:
+  - **Overview:** CPU / memory / GPU for the whole process tree with history. For Claude Code
+    sessions, also: prompts, responses, tool calls, errors (tool and API), context size and peak,
+    tokens (input / cache read / cache write / output, with subagents), average turn time,
+    compactions, cost and lines changed when Claude Code has recorded them, activity charts
+    (tool calls, output tokens, prompts) over 1h / 6h / 24h, and top tools.
+  - **Log:** prompts, slash commands, replies, tool calls with their inputs, results and
+    durations, subagent launches, compactions, API errors and hook failures. Filter by kind or
+    text; click a row to expand it. Tool calls still running show a live timer.
+  - **Tools:** calls, error rate, average and maximum duration for each tool.
+  - **Processes:** the busiest processes in the agent's tree, with CPU and memory.
+  - **Subagents:** each subagent (running and finished) with type, task, model, tokens, tool calls
+    and its last action.
+  - Header buttons reveal the transcript in Finder, open the working folder, or copy the session ID.
+
+### Machine tab
+
 | Card | Details |
 |---|---|
-| **Agents** | Each running AI agent with working/idle status, project folder and source (Claude app, Terminal, …), plus the CPU, memory and GPU used by everything it has spawned, a CPU history, its busiest command and any running subagents |
 | **CPU** | Total, user/system history, per-core bars split into E-cores / P-cores, load average, process count, thermal state, top 5 processes by CPU |
 | **GPU** | Utilisation history, renderer / tiler %, GPU memory in use, model and core count |
 | **Memory** | Used of total (Activity Monitor's definition), App / Wired / Compressed / Cached breakdown, memory pressure, swap, top 5 processes by memory |
@@ -47,7 +72,7 @@ From the menu bar item or the app's **View** menu:
 Closing the window keeps Vitals running in the menu bar; click the Dock icon or choose
 **Show Dashboard** to bring it back.
 
-## How the Agents card works
+## How agent tracking works
 
 - **Claude Code** sessions (desktop app and terminal) are read from Claude Code's own registry,
   `~/.claude/sessions/<pid>.json`, which gives the session title, folder and a busy/idle status.
@@ -60,8 +85,15 @@ Closing the window keeps Vitals running in the menu bar; click the Dock icon or 
   servers, background jobs. CPU includes children that have already exited, so bursts of
   short-lived processes count (Activity Monitor and `top` mostly miss them). Processes the agent
   started that later detach are still counted while they run.
-- **Subagents** are listed while running, from `~/.claude/projects/…/subagents`. They run inside
-  their parent process, so their resource use is part of the parent's numbers.
+- **Logs and metrics** for Claude Code come from its session transcript,
+  `~/.claude/projects/<folder>/<session>.jsonl`, read incrementally on a background queue
+  (only newly appended bytes are parsed, and bulky request records are skipped unread). The
+  format is undocumented, so missing fields are ignored rather than treated as errors. The log
+  keeps the latest 2,000 entries; per-minute activity covers the last 24 hours.
+- **Subagents** come from `~/.claude/projects/…/<session>/subagents`, with their own transcripts
+  parsed the same way. They run inside their parent process, so their resource use is part of
+  the parent's numbers.
+- **Other agents** don't write a log Vitals can read, so they show resource use only.
 - **Not shown:** per-agent power (macOS doesn't carry a finished child's energy up to its parent,
   so the figure isn't reliable) and per-agent network (no API without admin rights).
 

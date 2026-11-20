@@ -238,3 +238,92 @@ private struct HoverReadout: View {
         .allowsHitTesting(false)
     }
 }
+
+/// Stacked bars, one per time bucket (oldest first). Every series has one value per bucket.
+struct BarChart: View {
+    var series: [ChartSeries]
+    var height: CGFloat = 64
+    var format: (Double) -> String
+    var footer: (Int) -> String
+
+    @State private var hoverX: CGFloat?
+
+    var body: some View {
+        let n = series.map(\.values.count).min() ?? 0
+        let peak = max(1, (0..<n).map { i in series.reduce(0) { $0 + $1.values[i] } }.max() ?? 0)
+        GeometryReader { geo in
+            let slot = geo.size.width / CGFloat(max(1, n))
+            Canvas { ctx, size in
+                for f in [0.25, 0.5, 0.75] {
+                    var g = Path()
+                    g.move(to: CGPoint(x: 0, y: size.height * f))
+                    g.addLine(to: CGPoint(x: size.width, y: size.height * f))
+                    ctx.stroke(g, with: .color(Palette.grid), lineWidth: 1)
+                }
+                let gap: CGFloat = slot > 5 ? 1.5 : 0.5
+                for i in 0..<n {
+                    var base = 0.0
+                    for s in series {
+                        let v = s.values[i]
+                        guard v > 0 else { continue }
+                        let top = size.height * (1 - CGFloat((base + v) / peak))
+                        let bottom = size.height * (1 - CGFloat(base / peak))
+                        let rect = CGRect(x: CGFloat(i) * slot + gap / 2, y: top, width: max(0.5, slot - gap), height: max(1, bottom - top))
+                        ctx.fill(Path(roundedRect: rect, cornerRadius: min(1.5, slot / 4)), with: .color(s.color))
+                        base += v
+                    }
+                }
+                var b = Path()
+                b.move(to: CGPoint(x: 0, y: size.height - 0.5))
+                b.addLine(to: CGPoint(x: size.width, y: size.height - 0.5))
+                ctx.stroke(b, with: .color(Palette.baseline), lineWidth: 1)
+            }
+            .overlay(alignment: .topLeading) { ScaleLabel(text: format(peak)) }
+            .overlay(alignment: .topLeading) {
+                if let hoverX, n > 0 {
+                    let i = max(0, min(n - 1, Int(hoverX / max(slot, 1))))
+                    HoverReadout(x: CGFloat(i) * slot + slot / 2, size: geo.size,
+                                 rows: series.reversed().map { ($0.label, $0.color, format($0.values[i])) },
+                                 footer: footer(i))
+                }
+            }
+            .contentShape(Rectangle())
+            .onContinuousHover { phase in
+                if case .active(let p) = phase { hoverX = p.x } else { hoverX = nil }
+            }
+        }
+        .frame(height: height)
+        .accessibilityElement()
+        .accessibilityLabel(series.map { "\($0.label) total \(format($0.values.reduce(0, +)))" }.joined(separator: ", "))
+    }
+}
+
+/// Minimal line for list rows; no grid or hover.
+struct Sparkline: View {
+    var values: [Double]
+    var color: Color
+    var range: ClosedRange<Double>? = nil
+
+    var body: some View {
+        Canvas { ctx, size in
+            let count = values.count
+            guard count > 1 else { return }
+            let lo = range?.lowerBound ?? 0
+            let hi = max(range?.upperBound ?? (values.max() ?? 0) * 1.1, lo + .ulpOfOne)
+            let step = size.width / CGFloat(Series.capacity - 1)
+            var line = Path()
+            for back in 0..<count {
+                let v = min(max(values[count - 1 - back], lo), hi)
+                let p = CGPoint(x: size.width - CGFloat(back) * step, y: size.height * (1 - CGFloat((v - lo) / (hi - lo))))
+                if back == 0 { line.move(to: p) } else { line.addLine(to: p) }
+            }
+            var area = line
+            area.addLine(to: CGPoint(x: size.width - CGFloat(count - 1) * step, y: size.height))
+            area.addLine(to: CGPoint(x: size.width, y: size.height))
+            area.closeSubpath()
+            ctx.fill(area, with: .color(color.opacity(0.18)))
+            ctx.stroke(line, with: .color(color), style: StrokeStyle(lineWidth: 1.2, lineJoin: .round))
+        }
+        .accessibilityHidden(true)
+    }
+}

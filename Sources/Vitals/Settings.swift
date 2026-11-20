@@ -8,11 +8,18 @@ final class AppSettings: ObservableObject {
     @Published var alwaysOnTop: Bool { didSet { defaults.set(alwaysOnTop, forKey: "alwaysOnTop") } }
     @Published var allSpaces: Bool { didSet { defaults.set(allSpaces, forKey: "allSpaces") } }
     @Published var showDockIcon: Bool { didSet { defaults.set(showDockIcon, forKey: "showDockIcon") } }
+    @Published var tab: DashboardTab { didSet { if persist { defaults.set(tab.rawValue, forKey: "dashboardTab") } } }
+    /// Agent shown in the Agents tab's detail pane (not persisted: agent ids change per run).
+    @Published var selectedAgent: String?
     @Published var menuBar: Set<MenuBarItem> {
         didSet { defaults.set(menuBar.map(\.rawValue), forKey: "menuBarItems") }
     }
 
-    init() {
+    private let persist: Bool
+
+    /// `persist: false` keeps tab changes out of UserDefaults (used by `--snapshot`).
+    init(persist: Bool = true) {
+        self.persist = persist
         defaults.register(defaults: [
             "interval": 1.0,
             "alwaysOnTop": false,
@@ -24,6 +31,7 @@ final class AppSettings: ObservableObject {
         alwaysOnTop = defaults.bool(forKey: "alwaysOnTop")
         allSpaces = defaults.bool(forKey: "allSpaces")
         showDockIcon = defaults.bool(forKey: "showDockIcon")
+        tab = DashboardTab(rawValue: defaults.string(forKey: "dashboardTab") ?? "") ?? .machine
         let raw = defaults.stringArray(forKey: "menuBarItems") ?? []
         menuBar = Set(raw.compactMap(MenuBarItem.init(rawValue:)))
     }
@@ -44,4 +52,10 @@ enum MenuBarItem: String, CaseIterable, Identifiable {
         case .power: "Power"
         }
     }
+}
+
+enum DashboardTab: String, CaseIterable, Identifiable {
+    case machine, agents
+    var id: String { rawValue }
+    var title: String { self == .machine ? "Machine" : "Agents" }
 }
