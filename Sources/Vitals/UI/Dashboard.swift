@@ -9,26 +9,39 @@ struct DashboardView: View {
         let h = monitor.history
         VStack(spacing: 0) {
             HeaderBar(snapshot: s, settings: settings)
-            ScrollView {
-                MasonryLayout(minColumnWidth: 340, spacing: 12) {
-                    AgentsCard(s: s, h: h, interval: settings.interval)
-                    CPUCard(s: s, h: h, interval: settings.interval)
-                    GPUCard(s: s, h: h, interval: settings.interval)
-                    MemoryCard(s: s, h: h, interval: settings.interval)
-                    NetworkCard(s: s, h: h, interval: settings.interval)
-                    DiskCard(s: s, h: h, interval: settings.interval)
-                    SensorsCard(s: s, h: h, interval: settings.interval)
-                    if s.power.hasBattery || s.power.systemPower != nil {
-                        PowerCard(s: s, h: h, interval: settings.interval)
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 14)
+            switch settings.tab {
+            case .machine: MachineView(s: s, h: h, interval: settings.interval)
+            case .agents: AgentsView(s: s, h: h, interval: settings.interval, selection: $settings.selectedAgent)
             }
-            .scrollIndicators(.never)
         }
         .background(Palette.page)
         .environment(\.colorScheme, .dark)
+    }
+}
+
+/// Standard machine vitals: one card per subsystem.
+private struct MachineView: View {
+    var s: Snapshot
+    var h: History
+    var interval: Double
+
+    var body: some View {
+        ScrollView {
+            MasonryLayout(minColumnWidth: 340, spacing: 12) {
+                CPUCard(s: s, h: h, interval: interval)
+                GPUCard(s: s, h: h, interval: interval)
+                MemoryCard(s: s, h: h, interval: interval)
+                NetworkCard(s: s, h: h, interval: interval)
+                DiskCard(s: s, h: h, interval: interval)
+                SensorsCard(s: s, h: h, interval: interval)
+                if s.power.hasBattery || s.power.systemPower != nil {
+                    PowerCard(s: s, h: h, interval: interval)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 14)
+        }
+        .scrollIndicators(.never)
     }
 }
 
@@ -41,6 +54,7 @@ private struct HeaderBar: View {
     var body: some View {
         HStack(spacing: 10) {
             Text("Vitals").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.textPrimary)
+            TabToggle(tab: $settings.tab, working: snapshot.agents.filter(\.isWorking).count)
             Text(subtitle).font(.system(size: 12)).foregroundStyle(Palette.muted).lineLimit(1)
             Spacer()
             Menu {
@@ -80,6 +94,45 @@ private struct HeaderBar: View {
         parts.append(Fmt.memory(snapshot.memory.total))
         parts.append("up \(Fmt.uptime(snapshot.uptime))")
         return parts.joined(separator: "  ·  ")
+    }
+}
+
+/// Machine / Agents switch in the header.
+private struct TabToggle: View {
+    @Binding var tab: DashboardTab
+    var working: Int
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(DashboardTab.allCases) { t in
+                Button { tab = t } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: t == .machine ? "cpu" : "sparkles").font(.system(size: 10.5, weight: .semibold))
+                        Text(t.title).font(.system(size: 11.5, weight: .medium))
+                        if t == .agents && working > 0 {
+                            Text("\(working)")
+                                .font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Capsule().fill(Palette.blue))
+                                .foregroundStyle(Color.white)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 22)
+                    .foregroundStyle(tab == t ? Palette.textPrimary : Palette.muted)
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(tab == t ? Color.white.opacity(0.11) : Color.clear))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(t == .machine ? "Machine vitals (⌘1)" : "Agent vitals (⌘2)")
+                .accessibilityAddTraits(tab == t ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.045)))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Palette.border))
+        .fixedSize()
     }
 }
 

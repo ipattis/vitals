@@ -118,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         statusItem.button?.imagePosition = .imageLeading
         let menu = NSMenu()
         menu.addItem(withTitle: "Show Dashboard", action: #selector(showDashboard), keyEquivalent: "").target = self
+        for item in tabItems(withShortcuts: false) { menu.addItem(item) }
         menu.addItem(.separator())
         for item in preferenceItems() { menu.addItem(item) }
         menu.addItem(.separator())
@@ -190,6 +191,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let viewItem = NSMenuItem()
         let viewMenu = NSMenu(title: "View")
+        for item in tabItems(withShortcuts: true) { viewMenu.addItem(item) }
+        viewMenu.addItem(.separator())
         for item in preferenceItems() { viewMenu.addItem(item) }
         viewItem.submenu = viewMenu
         main.addItem(viewItem)
@@ -206,6 +209,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSApp.windowsMenu = windowMenu
 
         NSApp.mainMenu = main
+    }
+
+    /// "Machine Vitals" / "Agent Vitals" items (⌘1 / ⌘2 in the View menu).
+    private func tabItems(withShortcuts: Bool) -> [NSMenuItem] {
+        DashboardTab.allCases.enumerated().map { i, tab in
+            let title = tab == .machine ? "Machine Vitals" : "Agent Vitals"
+            let mi = NSMenuItem(title: title, action: #selector(showTab(_:)), keyEquivalent: withShortcuts ? "\(i + 1)" : "")
+            mi.target = self
+            mi.representedObject = tab.rawValue
+            return mi
+        }
+    }
+
+    @objc private func showTab(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let tab = DashboardTab(rawValue: raw) else { return }
+        settings.tab = tab
+        showDashboard()
     }
 
     @objc private func toggleMenuBarItem(_ sender: NSMenuItem) {
@@ -243,6 +263,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case #selector(toggleMenuBarItem(_:)):
             let item = (menuItem.representedObject as? String).flatMap(MenuBarItem.init(rawValue:))
             menuItem.state = item.map { settings.menuBar.contains($0) } == true ? .on : .off
+        case #selector(showTab(_:)):
+            menuItem.state = (menuItem.representedObject as? String) == settings.tab.rawValue ? .on : .off
         case #selector(setInterval(_:)):
             menuItem.state = (menuItem.representedObject as? Double) == settings.interval ? .on : .off
         case #selector(toggleOnTop): menuItem.state = settings.alwaysOnTop ? .on : .off

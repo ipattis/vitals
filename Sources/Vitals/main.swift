@@ -12,7 +12,7 @@ if let i = arguments.firstIndex(of: "--export-icon"), i + 1 < arguments.count {
 if arguments.contains("--dump") {
     let monitor = SystemMonitor()
     monitor.start(interval: 1)
-    DispatchQueue.main.asyncAfter(deadline: .now() + 3.2) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + (arguments.contains("--wait") ? 8 : 3.2)) {
         let s = monitor.snapshot
         print("CPU      \(Fmt.percent(s.cpu.total)) (user \(Fmt.percent(s.cpu.user)), system \(Fmt.percent(s.cpu.system))), \(s.cpu.cores.count) cores")
         if let g = s.gpu { print("GPU      \(Fmt.percent(g.device)) \(g.name), \(Fmt.memory(g.memoryInUse)) in use") }
@@ -29,6 +29,10 @@ if arguments.contains("--dump") {
             if let b = a.busiest { line += " · busiest: \(b.command) \(Fmt.percent(b.cpu))" }
             if !a.subagents.isEmpty { line += " · subagents: " + a.subagents.map(\.description).joined(separator: ", ") }
             print(line)
+            if let t = a.activity {
+                print("         model \(t.model ?? "?") · \(t.prompts) prompts · \(t.toolCalls) tool calls (\(t.errorCount) errors) · context \(Fmt.tokens(t.contextTokens)) · out \(Fmt.tokens(t.tokens.output)) · \(t.events.count) events · \(t.subagents.count) subagents")
+                for e in t.events.suffix(3) { print("         \(Fmt.clock(e.time)) \(e.title): \(e.text.prefix(80))") }
+            }
         }
         exit(0)
     }
@@ -44,8 +48,21 @@ if let i = arguments.firstIndex(of: "--snapshot"), i + 1 < arguments.count {
         let app = NSApplication.shared
         app.setActivationPolicy(.prohibited)
         let monitor = SystemMonitor()
-        let settings = AppSettings()
+        let settings = AppSettings(persist: false)
+        // `--tab agents` renders the Agents tab; `--agent <n>` selects the n-th agent in it.
+        if let t = arguments.firstIndex(of: "--tab"), t + 1 < arguments.count, let tab = DashboardTab(rawValue: arguments[t + 1]) {
+            settings.tab = tab
+        }
+        let pick = arguments.firstIndex(of: "--agent").flatMap { $0 + 1 < arguments.count ? Int(arguments[$0 + 1]) : nil }
+        let section = arguments.firstIndex(of: "--section").flatMap { $0 + 1 < arguments.count ? arguments[$0 + 1] : nil }
+        SnapshotOptions.section = section
         monitor.start(interval: 0.5)
+        if let pick {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                let agents = monitor.snapshot.agents
+                if agents.indices.contains(pick) { settings.selectedAgent = agents[pick].id }
+            }
+        }
         let view = NSHostingView(rootView: DashboardView(monitor: monitor, settings: settings))
         let window = NSWindow(contentRect: NSRect(x: -10_000, y: 0, width: w, height: h),
                               styleMask: [.borderless], backing: .buffered, defer: false)

@@ -34,7 +34,11 @@ struct History {
     var diskRead = Series(), diskWrite = Series()
     var cpuTemp = Series()
     var power = Series()
-    var agentCPU: [String: Series] = [:]   // keyed by AgentReading.id
+    // Per agent, keyed by AgentReading.id.
+    var agentCPU: [String: Series] = [:]
+    var agentMemory: [String: Series] = [:]
+    var agentGPU: [String: Series] = [:]
+    var agentsTotalCPU = Series()          // sum over all agents, fraction of one core
 
     mutating func record(_ s: Snapshot) {
         cpuUser.append(s.cpu.user)
@@ -47,13 +51,19 @@ struct History {
         diskWrite.append(s.disk.writeRate)
         if let t = s.sensors.cpu { cpuTemp.append(t) }
         if let w = s.power.systemPower { power.append(w) }
-        var agents: [String: Series] = [:]
-        for a in s.agents {
-            var series = agentCPU[a.id] ?? Series()
-            series.append(a.cpu)
-            agents[a.id] = series
+        func update(_ old: [String: Series], _ value: (AgentReading) -> Double) -> [String: Series] {
+            var result: [String: Series] = [:]
+            for a in s.agents {
+                var series = old[a.id] ?? Series()
+                series.append(value(a))
+                result[a.id] = series
+            }
+            return result
         }
-        agentCPU = agents
+        agentCPU = update(agentCPU) { $0.cpu }
+        agentMemory = update(agentMemory) { Double($0.memory) }
+        agentGPU = update(agentGPU) { $0.gpu }
+        agentsTotalCPU.append(s.agents.reduce(0) { $0 + $1.cpu })
     }
 }
 

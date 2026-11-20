@@ -64,4 +64,42 @@ enum Fmt {
     static func secondsAgo(_ s: Double) -> String {
         s < 0.5 ? "now" : (s < 60 ? "\(Int(s.rounded()))s ago" : "\(Int(s / 60))m \(Int(s) % 60)s ago")
     }
+
+    /// Token counts: "812", "34.1k", "1.25M".
+    static func tokens(_ n: Int) -> String {
+        let v = Double(max(0, n))
+        if v < 1000 { return "\(Int(v))" }
+        if v < 1_000_000 { return v < 10_000 ? String(format: "%.1fk", v / 1000) : String(format: "%.0fk", v / 1000) }
+        if v < 1_000_000_000 { return v < 10_000_000 ? String(format: "%.2fM", v / 1e6) : String(format: "%.1fM", v / 1e6) }
+        return String(format: "%.2fB", v / 1e9)
+    }
+
+    /// Durations: "420 ms", "4.2 s", "3m 12s", "2h 5m".
+    static func duration(_ s: Double) -> String {
+        guard s.isFinite else { return "—" }
+        if s < 1 { return "\(Int((s * 1000).rounded())) ms" }
+        if s < 60 { return String(format: s < 10 ? "%.1f s" : "%.0f s", s) }
+        let t = Int(s)
+        if t < 3600 { return "\(t / 60)m \(t % 60)s" }
+        return "\(t / 3600)h \((t % 3600) / 60)m"
+    }
+
+    /// Time since a date: "now", "45s", "12m", "3h 4m".
+    static func ago(_ date: Date?, now: Date = Date()) -> String {
+        guard let date else { return "—" }
+        let s = max(0, now.timeIntervalSince(date))
+        if s < 5 { return "now" }
+        if s < 60 { return "\(Int(s))s" }
+        return uptime(s)
+    }
+
+    static func clock(_ date: Date) -> String { clockFormat.string(from: date) }
+
+    private static let clockFormat: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    static func usd(_ v: Double) -> String { v < 10 ? String(format: "$%.2f", v) : String(format: "$%.0f", v) }
 }
